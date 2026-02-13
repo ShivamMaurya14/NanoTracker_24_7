@@ -47,12 +47,12 @@ graph TD
     BAT -->|Regulatory| LDO[HT7333-A]
     LDO -->|3.3V| ESP[ESP8266 VCC]
     
-    ESP -->|GPIO 5 (TX)| GSM_RX[SIM800L RX]
-    ESP -->|GPIO 4 (RX)| GSM_TX[SIM800L TX]
-    ESP -->|GPIO 16| R[RST (Deep Sleep Wake)]
+    ESP -->|GPIO 5 TX| GSM_RX[SIM800L RX]
+    ESP -->|GPIO 4 RX| GSM_TX[SIM800L TX]
+    ESP -->|GPIO 16| R[RST Deep Sleep Wake]
     
-    BAT -->|R1 (330k)| ADC[A0 (Battery Monitor)]
-    ADC -->|R2 (100k)| GND
+    BAT -->|R1 330k| ADC[A0 Battery Monitor]
+    ADC -->|R2 100k| GND
 ```
 
 > **Critical Config**: Connect `GPIO 16` to `RST` to enable Deep Sleep wake-up.
