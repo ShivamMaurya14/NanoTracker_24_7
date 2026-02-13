@@ -55,7 +55,10 @@ graph TD
     ADC -->|R2 100k| GND
 ```
 
-> **Critical Config**: Connect `GPIO 16` to `RST` to enable Deep Sleep wake-up.
+> **⚠️ CRITICAL: Deep Sleep Wake-Up Connection**
+> *   **NodeMCU / Wemos D1 Mini**: Connect a jumper wire between **D0** (GPIO 16) and **RST**.
+> *   **Bare ESP-12F**: Solder a wire or use a 470Ω-1kΩ resistor between **GPIO 16** and **RST**.
+> *   *Without this connection, the device will sleep forever and never wake up!*
 
 ---
 
@@ -93,18 +96,33 @@ The device listens for SMS commands immediately upon waking. Usage: Send an SMS 
 ## 📊 Data Interpretation
 
 The standard telemetry SMS format:
-```text
+text
 Tracker Info:
-LAC: 1A2B (Hex)
-CID: 3C4D (Hex)
+LAC: 6699 (1A2B)
+CID: 15437 (3C4D)
 Link: http://www.opencellid.org/
 Batt: 4.12V
 ```
-### Decoding Location
-1.  Visit [CellMapper](https://www.cellmapper.net/) or [OpenCelliD](https://www.opencellid.org/).
-2.  Input your carrier's **MCC** & **MNC**.
-3.  Convert Hex **LAC** -> Decimal.
-4.  Convert Hex **CID** -> Decimal.
+### 🧠 Understanding the Data
+The tracker provides cellular network identifiers in **Decimal (Hex)** format:
+*   **LAC (Location Area Code)**: Identifies a large group of cell towers (like a neighborhood or district).
+*   **CID (Cell ID)**: Identifies the *specific* cell tower your device is connected to.
+
+By combining **LAC + CID + MCC (Country Code) + MNC (Network Code)**, we can pinpoint the exact tower location using a public database.
+
+### 📍 Decoding Directions
+1.  **Find your MCC/MNC**: Google "MCC MNC list [Your Country]" (e.g., India is 404/405).
+2.  **Visit**: [OpenCelliD](https://www.opencellid.org/) or [CellMapper](https://www.cellmapper.net/).
+3.  **Enter Data**:
+    *   **MCC**: (e.g., 404)
+    *   **MNC**: (e.g., 45)
+    *   **LAC**: Use the first number (Decimal) from the SMS (e.g., `6699`).
+    *   **CID**: Use the first number (Decimal) from the SMS (e.g., `15437`).
+4.  **Result**: The map will show the approximate location of the tracker (based on the tower).
+
+### ℹ️ Did You Know?
+*   **GPS vs LBS**: GPS is precise (5-10 meters) but drains battery quickly and fails indoors. **LBS (Cell Tower Triangulation)** is less precise (500m - 2km) but works **indoors, underground, and inside shipping containers**, using a tiny fraction of the power.
+*   **Deep Sleep**: This device can theoretically last for months on a single charge because it spends 99.9% of its time completely powered down.
 
 ---
 

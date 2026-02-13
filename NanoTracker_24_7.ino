@@ -198,8 +198,8 @@ String getCellTowerData() {
       
       // Format 1: Raw Data for OpenCelliD
       String message = "Tracker Info:\n";
-      message += "LAC: " + String(lac) + "\n";
-      message += "CID: " + String(ci) + "\n";
+      message += "LAC: " + String(lac) + " (" + String(lac, HEX) + ")\n";
+      message += "CID: " + String(ci) + " (" + String(ci, HEX) + ")\n";
       
       // Format 2: Attempt to construct a helpful URL (Requires MCC/MNC usually 404/45 for India etc)
       // Since we can't easily auto-detect MCC/MNC without AT+COPS?, we provide the Raw codes.
