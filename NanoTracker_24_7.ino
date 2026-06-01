@@ -2,284 +2,257 @@
 #include <SoftwareSerial.h>
 #include <EEPROM.h>
 
-// ==========================================
-// CONFIGURATION
-// ==========================================
-const String PHONE_NUMBER = "+919999999999";    // Owner/User Number
-const String LOGISTICS_NUMBER = "+918888888888"; // Logistics Company API/SMS Gateway
-unsigned long sleepSeconds = 3600;           // Default: 1 Hour Deep Sleep
+#define SIM_RX 5   // D1
+#define SIM_TX 4   // D2
 
-// SIM800L Pins (SoftwareSerial)
-// ESP8266 Pin D1 (GPIO 5) -> SIM800L TX
-// ESP8266 Pin D2 (GPIO 4) -> SIM800L RX
-const int RX_PIN = 5; 
-const int TX_PIN = 4;
+const char* OWNER_NUMBER     = "+919999999999";
+const char* LOGISTICS_NUMBER = "+918888888888";
 
-// SIM800L Commands
-const String CMD_SLEEP = "AT+CSCLK=2"; // Auto-sleep when no data
-const String CMD_WAKE  = "AT";         // Sending characters wakes it up
+SoftwareSerial sim800(SIM_RX, SIM_TX);
 
-SoftwareSerial sim800(RX_PIN, TX_PIN);
+uint32_t sleepSeconds = 3600;
 
-void setup() {
-  // 0. Disable WiFi immediately to save power (~70mA saved)
-  WiFi.mode(WIFI_OFF);
-  WiFi.forceSleepBegin();
-  delay(1);
+String readResponse(unsigned long timeout = 3000)
+{
+    String resp = "";
+    unsigned long start = millis();
 
-  // 1. Initialize Debug Serial (Hardware) and GSM Serial (Software)
-  Serial.begin(115200);
-  sim800.begin(9600);
-  delay(1000);
-  
-  // Initialize EEPROM for Settings
-  EEPROM.begin(512);
-  unsigned long storedSleep;
-  EEPROM.get(0, storedSleep);
-  
-  // Basic validation (10s to 24h)
-  if (storedSleep >= 10 && storedSleep <= 86400) {
-    sleepSeconds = storedSleep;
-    Serial.println("[EEPROM] Loaded Sleep Time: " + String(sleepSeconds));
-  } else {
-    Serial.println("[EEPROM] Using Default Sleep Time: " + String(sleepSeconds));
-  }
+    while (millis() - start < timeout)
+    {
+        while (sim800.available())
+        {
+            resp += (char)sim800.read();
+        }
+    }
+    return resp;
+}
 
-  Serial.println("\n[SYSTEM] Wake Up...");
+bool sendAT(String cmd, String expected = "OK", unsigned long timeout = 3000)
+{
+    while (sim800.available())
+        sim800.read();
 
-  // 2. Handshake with SIM800L
-  // Send a dummy to wake it from sleep if needed
-  sim800.println("AT"); 
-  delay(100);
-  
-  if (waitForATResponse("AT", 2000)) {
-    Serial.println("[GSM] SIM800L Ready");
-  } else {
-    Serial.println("[GSM] SIM800L Not Responding! (Check Power)");
-    // Even if it fails, we go to sleep to save battery and try again later
-    goToDeepSleep(); 
-  }
+    sim800.println(cmd);
 
-  // 3. Configure Text Mode for SMS
-  sendATCommand("AT+CMGF=1"); // Text Mode
-  delay(1000);
+    String resp = readResponse(timeout);
 
-  // 4. Wait for Network Registration
-  // CREG? returns +CREG: <n>,<stat>
-  // <stat> 1 = Registered Home, 5 = Registered Roaming
-  if (waitForNetworkRegistration(20000)) {
-    Serial.println("[GSM] Network Registered");
-    
-    // 5. Get Cell ID and LAC
-    String locationData = getCellTowerData();
-    
-    if (locationData.length() > 0) {
-      String battInfo = getBatteryStatus();
-      String finalMessage = locationData + "\n" + battInfo;
-      
-      Serial.println("[GSM] Sending SMS to User: " + finalMessage);
-      sendSMS(PHONE_NUMBER, finalMessage);
-      
-      delay(2000); // Small delay between messages
-      
-      Serial.println("[GSM] Sending SMS to Logistics: " + finalMessage);
-      sendSMS(LOGISTICS_NUMBER, finalMessage);
-    } else {
-      Serial.println("[ERROR] Failed to retrieve Cell ID/LAC");
-      sendSMS(PHONE_NUMBER, "Tracker Alive: GPS/Cell update failed.");
+    Serial.println("CMD : " + cmd);
+    Serial.println(resp);
+
+    return resp.indexOf(expected) != -1;
+}
+
+bool initSIM800()
+{
+    for(int i=0;i<5;i++)
+    {
+        if(sendAT("AT"))
+            return true;
+
+        delay(1000);
     }
 
-  } else {
-    Serial.println("[ERROR] Network Registration Timeout");
-  }
-
-  // 6. Check for Remote Commands (SMS)
-  checkIncomingCommands();
-
-  // 7. Put SIM800L to Sleep (Power Saving)
-  Serial.println("[GSM] Putting SIM800L to Sleep...");
-  sendATCommand(CMD_SLEEP);
-  delay(200);
-
-  // 8. Enter Deep Sleep
-  goToDeepSleep();
+    return false;
 }
 
-void loop() {
-  // Loop is never reached in Deep Sleep logic
-}
+bool waitForNetwork()
+{
+    for(int i=0;i<20;i++)
+    {
+        sim800.println("AT+CREG?");
+        String r = readResponse(2000);
 
-// ==========================================
-// HELPER FUNCTIONS
-// ==========================================
+        if(r.indexOf(",1") != -1 || r.indexOf(",5") != -1)
+            return true;
 
-void goToDeepSleep() {
-  Serial.println("[SYSTEM] Entering Deep Sleep for " + String(sleepSeconds) + " seconds.");
-  Serial.flush(); // Wait for serial data to complete
-  
-  // WAKE_RF_DEFAULT: Wake up with radio (WiFi) calibration. 
-  // Can use WAKE_RF_DISABLED if WiFi isn't used to save more power, 
-  // but standard usage often keeps it default.
-  ESP.deepSleep(sleepSeconds * 1000000ULL); 
-}
-
-bool waitForATResponse(String cmd, unsigned long timeout) {
-  sim800.println(cmd);
-  unsigned long start = millis();
-  while (millis() - start < timeout) {
-    if (sim800.available()) {
-      String response = sim800.readString();
-      if (response.indexOf("OK") != -1) {
-        return true;
-      }
+        delay(1000);
     }
-  }
-  return false;
+
+    return false;
 }
 
-bool waitForNetworkRegistration(unsigned long timeout) {
-  unsigned long start = millis();
-  while (millis() - start < timeout) {
+String getOperatorInfo()
+{
+    sim800.println("AT+COPS?");
+    return readResponse(3000);
+}
+
+String getCellInfo()
+{
+    sendAT("AT+CREG=2");
+
     sim800.println("AT+CREG?");
-    delay(500);
-    if (sim800.available()) {
-      String response = sim800.readString();
-      // Check for Registered (1) or Roaming (5)
-      // Responses like: +CREG: 0,1 or +CREG: 0,5
-      if (response.indexOf(",1") != -1 || response.indexOf(",5") != -1) {
-        return true;
-      }
-    }
-    delay(1000);
-  }
-  return false;
+    String resp = readResponse(3000);
+
+    String msg = "Cell Info\n";
+    msg += resp;
+
+    return msg;
 }
 
-String getCellTowerData() {
-  // Request detailed network info: AT+CREG=2 enables returning Hex LAC and CID
-  sendATCommand("AT+CREG=2");
-  delay(500);
-  
-  sim800.println("AT+CREG?");
-  delay(500);
-  
-  // Buffer for reading
-  String response = "";
-  unsigned long start = millis();
-  while (millis() - start < 2000) {
-    if (sim800.available()) {
-      response += (char)sim800.read();
-    }
-  }
+float readBatteryVoltage()
+{
+    int raw = analogRead(A0);
 
-  // Expected Response format: +CREG: 2,<stat>,"<lac>","<ci>"
-  // Example: +CREG: 2,1,"1A2B","3C4D"
-  
-  Serial.println("[DEBUG] CREG Response: " + response);
-  
-  int statIndex = response.indexOf("+CREG: 2,");
-  if (statIndex != -1) {
-    // Basic parsing logic
-    // Find first quote for LAC
-    int firstQuote = response.indexOf('"', statIndex);
-    int secondQuote = response.indexOf('"', firstQuote + 1);
-    
-    // Find third quote for CI
-    int thirdQuote = response.indexOf('"', secondQuote + 1);
-    int fourthQuote = response.indexOf('"', thirdQuote + 1);
-    
-    if (firstQuote != -1 && fourthQuote != -1) {
-      String lacHex = response.substring(firstQuote + 1, secondQuote);
-      String ciHex = response.substring(thirdQuote + 1, fourthQuote);
-      
-      // Convert Hex Strings to Long (integers)
-      long lac = strtol(lacHex.c_str(), NULL, 16);
-      long ci = strtol(ciHex.c_str(), NULL, 16);
-      
-      // Format 1: Raw Data for OpenCelliD
-      String message = "Tracker Info:\n";
-      message += "LAC: " + String(lac) + " (" + String(lac, HEX) + ")\n";
-      message += "CID: " + String(ci) + " (" + String(ci, HEX) + ")\n";
-      
-      // Format 2: Attempt to construct a helpful URL (Requires MCC/MNC usually 404/45 for India etc)
-      // Since we can't easily auto-detect MCC/MNC without AT+COPS?, we provide the Raw codes.
-      // User can input these into http://www.opencellid.org/
-      
-      message += "Link: http://www.opencellid.org/ (Use LAC/CID)";
-      
-      return message;
-    }
-  }
-  
-  return "";
+    float adcVoltage = (raw / 1023.0f);
+
+    // Reference approximation for your divider.
+    float batteryVoltage = adcVoltage * 4.2f;
+
+    return batteryVoltage;
 }
 
-String getBatteryStatus() {
-  // Read Analog Pin A0
-  // NOTE: ESP8266 Analog Pin range is 0-1.0V.
-  // To measure a Li-Ion (4.2V), you MUST use a voltage divider (e.g. R1=330k, R2=100k).
-  // Formula: Vout = Vin * (R2 / (R1 + R2)) -> Vin = Vout * ((R1+R2)/R2)
-  int raw = analogRead(A0);
-  
-  // Example calibration for a 4.3V max input range (Adjust based on your resistors)
-  // Voltage = (raw / 1023.0) * 4.3; 
-  float voltage = (raw / 1023.0) * 4.3; 
-  
-  return "Batt: " + String(voltage, 2) + "V";
+bool sendSMS(String number, String text)
+{
+    sim800.println("AT+CMGF=1");
+
+    if(readResponse(2000).indexOf("OK") == -1)
+        return false;
+
+    sim800.print("AT+CMGS=\"");
+    sim800.print(number);
+    sim800.println("\"");
+
+    String prompt = readResponse(3000);
+
+    if(prompt.indexOf(">") == -1)
+        return false;
+
+    sim800.print(text);
+
+    sim800.write(26);
+
+    String result = readResponse(15000);
+
+    return result.indexOf("+CMGS:") != -1;
 }
 
-void sendATCommand(String cmd) {
-  sim800.println(cmd);
-}
-
-void sendSMS(String number, String message) {
-  sim800.println("AT+CMGS=\"" + number + "\"");
-  delay(1000);
-  sim800.print(message);
-  delay(100);
-  sim800.write(26); // ASCII Code for CTRL+Z to send
-  delay(5000); // Wait for network to send
-  Serial.println("[GSM] SMS Sent request completed");
-}
-
-void checkIncomingCommands() {
-  Serial.println("[GSM] Checking for SMS commands...");
-  
-  // List unread messages
-  sim800.println("AT+CMGL=\"REC UNREAD\"");
-  delay(500);
-  
-  String content = "";
-  unsigned long start = millis();
-  // Wait up to 3 seconds for full response
-  while (millis() - start < 3000) {
-    while (sim800.available()) {
-      content += (char)sim800.read();
-    }
-    delay(10);
-  }
-
-  // Check content for Keywords
-  // "MODE:TRACK" -> 60s sleep
-  // "MODE:SAVE"  -> 3600s sleep
-  
-  if (content.indexOf("MODE:TRACK") != -1) {
-    sleepSeconds = 60; // 1 minute
-    Serial.println("[CMD] TRACK MODE ACTIVATED! Sleep = 60s");
+void saveSleep()
+{
     EEPROM.put(0, sleepSeconds);
     EEPROM.commit();
-  } 
-  else if (content.indexOf("MODE:SAVE") != -1) {
-    sleepSeconds = 3600; // 1 Hour
-    Serial.println("[CMD] SAVE MODE ACTIVATED. Sleep = 3600s");
-    EEPROM.put(0, sleepSeconds);
-    EEPROM.commit();
-  }
-  
-  // If we processed messages, clean up to prevent buffer overflow
-  if (content.indexOf("+CMGL:") != -1) {
-     Serial.println("[GSM] Deleting processed messages...");
-     sim800.println("AT+CMGD=1,4"); // Delete All Messages
-     delay(2000);
-  }
 }
+
+void loadSleep()
+{
+    EEPROM.get(0, sleepSeconds);
+
+    if(sleepSeconds < 60 || sleepSeconds > 86400)
+        sleepSeconds = 3600;
+}
+
+void processCommand(String cmd)
+{
+    cmd.trim();
+
+    if(cmd.indexOf("MODE:TRACK") != -1)
+    {
+        sleepSeconds = 60;
+        saveSleep();
+    }
+    else if(cmd.indexOf("MODE:SAVE") != -1)
+    {
+        sleepSeconds = 3600;
+        saveSleep();
+    }
+    else if(cmd.startsWith("SLEEP:"))
+    {
+        uint32_t value = cmd.substring(6).toInt();
+
+        if(value >= 60 && value <= 86400)
+        {
+            sleepSeconds = value;
+            saveSleep();
+        }
+    }
+}
+
+void checkCommands()
+{
+    sim800.println("AT+CMGL=\"REC UNREAD\"");
+
+    String resp = readResponse(5000);
+
+    if(resp.indexOf(LOGISTICS_NUMBER) == -1)
+        return;
+
+    if(resp.indexOf("MODE:TRACK") != -1)
+        processCommand("MODE:TRACK");
+
+    if(resp.indexOf("MODE:SAVE") != -1)
+        processCommand("MODE:SAVE");
+
+    int p = resp.indexOf("SLEEP:");
+    if(p != -1)
+    {
+        int e = resp.indexOf("\n", p);
+        processCommand(resp.substring(p, e));
+    }
+
+    sim800.println("AT+CMGD=1,4");
+    readResponse(3000);
+}
+
+void goSleep()
+{
+    sendAT("AT+CSCLK=2");
+
+    Serial.println("Sleeping...");
+    Serial.flush();
+
+    ESP.deepSleep((uint64_t)sleepSeconds * 1000000ULL);
+}
+
+void setup()
+{
+    WiFi.mode(WIFI_OFF);
+    WiFi.forceSleepBegin();
+
+    Serial.begin(115200);
+
+    sim800.begin(9600);
+
+    EEPROM.begin(64);
+
+    loadSleep();
+
+    delay(2000);
+
+    if(!initSIM800())
+    {
+        goSleep();
+    }
+
+    if(!waitForNetwork())
+    {
+        goSleep();
+    }
+
+    String report = "";
+    report += "Tracker Status\n\n";
+
+    report += getCellInfo();
+    report += "\n";
+
+    float batt = readBatteryVoltage();
+
+    report += "Battery: ";
+    report += String(batt, 2);
+    report += "V\n";
+
+    report += "Sleep: ";
+    report += String(sleepSeconds);
+    report += " sec\n";
+
+    sendSMS(OWNER_NUMBER, report);
+    sendSMS(LOGISTICS_NUMBER, report);
+
+    checkCommands();
+
+    goSleep();
+}
+
+void loop()
+{
+}
+
